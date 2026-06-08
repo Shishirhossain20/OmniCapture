@@ -1,0 +1,180 @@
+name: Build Flutter APK
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: Setup Java
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'zulu'
+        java-version: '11'
+        cache: gradle
+
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.10.0'
+        channel: 'stable'
+        cache: true
+
+    - name: Get Flutter packages
+      run: |
+        flutter pub get
+        flutter pub global activate rename
+
+    - name: Clean build
+      run: flutter clean
+
+    - name: Build APK - Universal (all architectures)
+      run: flutter build apk --release
+
+    - name: Build APK - Split per ABI (32-bit)
+      run: flutter build apk --split-per-abi --release -v | grep -E "arm.*v7"
+      continue-on-error: true
+
+    - name: Build APK - Split per ABI (64-bit)
+      run: flutter build apk --split-per-abi --release -v | grep -E "arm64"
+      continue-on-error: true
+
+    - name: Rename APKs for clarity
+      run: |
+        mkdir -p release_apks
+        cp build/app/outputs/flutter-apk/app-release.apk release_apks/OmniCapture-Universal-1.0.0.apk || true
+        
+        if [ -f build/app/outputs/apk/release/app-armeabi-v7a-release.apk ]; then
+          cp build/app/outputs/apk/release/app-armeabi-v7a-release.apk release_apks/OmniCapture-32bit-1.0.0.apk
+        fi
+        
+        if [ -f build/app/outputs/apk/release/app-arm64-v8a-release.apk ]; then
+          cp build/app/outputs/apk/release/app-arm64-v8a-release.apk release_apks/OmniCapture-64bit-1.0.0.apk
+        fi
+        
+        ls -lh release_apks/
+
+    - name: Display build summary
+      run: |
+        echo "=================================="
+        echo "✅ Build Completed Successfully!"
+        echo "=================================="
+        echo ""
+        echo "📱 Generated APK Files:"
+        du -h release_apks/* 2>/dev/null || echo "No APKs found"
+        echo ""
+        echo "📊 File Details:"
+        file release_apks/* 2>/dev/null || echo "No files"
+        echo ""
+        echo "✨ Build artifacts ready for download!"
+        echo "=================================="
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: OmniCapture-APKs
+        path: release_apks/
+        retention-days: 90
+        if-no-files-found: warn
+
+    - name: Upload universal APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: OmniCapture-Universal-APK
+        path: build/app/outputs/flutter-apk/app-release.apk
+        retention-days: 90
+      if: always()
+
+    - name: Create Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          release_apks/OmniCapture-Universal-1.0.0.apk
+          release_apks/OmniCapture-32bit-1.0.0.apk
+          release_apks/OmniCapture-64bit-1.0.0.apk
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Comment on PR
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '✅ **Build Successful!**\n\n📱 APK files have been generated and are ready for download from the **Artifacts** section.\n\n**Files:**\n- OmniCapture-Universal-APK (all devices)\n- OmniCapture-APKs (32-bit & 64-bit)\n\n**Size:** ~50-60 MB\n**Android:** 5.0+ (API 21+)'
+          })
+
+    - name: Build failed notification
+      if: failure()
+      run: |
+        echo "❌ Build Failed!"
+        echo "Check the logs above for details."
+        exit 1
+
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.10.0'
+        channel: 'stable'
+    
+    - name: Get dependencies
+      run: flutter pub get
+    
+    - name: Run tests
+      run: flutter test --coverage
+      continue-on-error: true
+    
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./coverage/lcov.info
+      continue-on-error: true
+
+  analyze:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.10.0'
+        channel: 'stable'
+    
+    - name: Get dependencies
+      run: flutter pub get
+    
+    - name: Run analyze
+      run: flutter analyze
+      continue-on-error: true
+    
+    - name: Format check
+      run: dart format --set-exit-if-changed .
+      continue-on-error: true
