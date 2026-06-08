@@ -1,0 +1,52 @@
+name: Daily Build
+
+on:
+  schedule:
+    # Run every day at 2:00 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  daily-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Java
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'zulu'
+        java-version: '11'
+        cache: gradle
+
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.10.0'
+        channel: 'stable'
+        cache: true
+
+    - name: Get Flutter packages
+      run: flutter pub get
+
+    - name: Build APK
+      run: flutter build apk --release
+
+    - name: Generate timestamp
+      id: timestamp
+      run: echo "date=$(date +'%Y-%m-%d')-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+    - name: Upload daily build
+      uses: actions/upload-artifact@v3
+      with:
+        name: OmniCapture-Daily-Build-${{ steps.timestamp.outputs.date }}
+        path: build/app/outputs/flutter-apk/app-release.apk
+        retention-days: 7
+
+    - name: Cleanup old artifacts
+      uses: geekyeggo/delete-artifact@v2
+      with:
+        name: OmniCapture-Daily-Build-*
+        failOnError: false
